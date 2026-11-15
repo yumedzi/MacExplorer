@@ -71,6 +71,39 @@ final class AppPreferences {
         get { defaults.bool(forKey: "explorer.showHidden") }
         set { set(newValue, for: "explorer.showHidden") }
     }
+    var sidebarCollapsed: Bool {
+        get { defaults.bool(forKey: "explorer.sidebar.collapsed") }
+        set {
+            let key = "explorer.sidebar.collapsed"
+            if defaults.object(forKey: key) != nil, defaults.bool(forKey: key) == newValue { return }
+            set(newValue, for: key)
+        }
+    }
+    var sidebarWidth: Double {
+        get {
+            let key = "explorer.sidebar.width"
+            guard defaults.object(forKey: key) != nil else { return 210 }
+            return min(300, max(165, defaults.double(forKey: key)))
+        }
+        set {
+            let key = "explorer.sidebar.width"
+            let clamped = min(300, max(165, newValue))
+            if defaults.object(forKey: key) != nil, abs(sidebarWidth - clamped) < 0.5 { return }
+            set(clamped, for: key)
+        }
+    }
+    var detailColumns: DetailColumnLayout {
+        get {
+            guard let data = defaults.data(forKey: "explorer.columns.details"),
+                  let value = try? JSONDecoder().decode(DetailColumnLayout.self, from: data) else { return .standard }
+            return value.sanitized()
+        }
+        set {
+            let value = newValue.sanitized()
+            if detailColumns == value { return }
+            if let data = try? JSONEncoder().encode(value) { set(data, for: "explorer.columns.details") }
+        }
+    }
     var terminalApplication: ApplicationChoice? {
         get { application(for: "explorer.applications.terminal") }
         set { setApplication(newValue, for: "explorer.applications.terminal") }

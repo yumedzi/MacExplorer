@@ -242,6 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         add(file, "Open Folder…", #selector(openFolder), "o")
         file.addItem(.separator())
         for (action, key, modifiers) in [(FileAction.newFolder, "n", NSEvent.ModifierFlags([.command, .shift])),
+                                         (.newTextFile, "", []), (.newMarkdownFile, "", []),
                                          (.rename, String(UnicodeScalar(NSF2FunctionKey)!), []),
                                          (.move, "m", [.command, .shift]),
                                          (.trash, String(UnicodeScalar(NSDeleteCharacter)!), [.command]),

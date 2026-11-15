@@ -51,6 +51,8 @@ extension FileAction {
         case .properties: "info.circle"
         case .move: "folder"
         case .newFolder: "folder.badge.plus"
+        case .newTextFile: "doc.text"
+        case .newMarkdownFile: "doc.plaintext"
         case .undo: "arrow.uturn.backward"
         case .cancel: "xmark.circle"
         }

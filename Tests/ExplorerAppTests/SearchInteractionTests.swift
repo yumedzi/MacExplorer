@@ -22,6 +22,36 @@ struct SearchInteractionTests {
         await browser.tab.sortTask?.value
     }
 
+    @Test func shortFolderStaysTopAlignedAfterTabSwitch() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("Explorer-TabAlign-\(UUID())")
+        let many = root.appendingPathComponent("many"), few = root.appendingPathComponent("few")
+        try FileManager.default.createDirectory(at: many, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: few, withIntermediateDirectories: true)
+        for index in 0..<40 { try Data().write(to: many.appendingPathComponent(String(format: "file-%02d.txt", index))) }
+        try Data("a".utf8).write(to: few.appendingPathComponent("S3-S10.md"))
+        try Data("b".utf8).write(to: few.appendingPathComponent("S5-followups.md"))
+        let browser = BrowserViewController(urls: [many, few], active: 0)
+        browser.tabs[0].viewMode = .details; browser.tabs[1].viewMode = .details
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = browser.view
+        defer { browser.suspend(); window.close(); try? FileManager.default.removeItem(at: root) }
+        browser.view.frame = NSRect(x: 0, y: 0, width: 900, height: 640)
+        browser.view.layoutSubtreeIfNeeded()
+        await finish(browser)
+        browser.tableScroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+        browser.activateTab(id: browser.tabs[1].id)
+        await finish(browser)
+        browser.view.layoutSubtreeIfNeeded()
+        browser.tableScroll.tile()
+        let clip = browser.tableScroll.contentView
+        #expect(browser.tab.visible.count == 2)
+        #expect(browser.table.frame.height + 0.5 >= browser.tableScroll.contentSize.height)
+        #expect(browser.table.rect(ofRow: 0).minY == 0)
+        #expect(clip.bounds.origin.y < 30)
+    }
+
     @Test func clearCancelsPendingSearchAndRestoresFolderSelection() async throws {
         let (root, browser) = try fixture()
         defer { browser.suspend(); try? FileManager.default.removeItem(at: root) }

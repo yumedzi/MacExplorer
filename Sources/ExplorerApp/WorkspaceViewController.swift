@@ -10,6 +10,7 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
     let sidebar = FolderSidebar()
     let titlebarTabs = TitlebarSurface()
     private let outer = ExplorerSplitView()
+    private let sidebarCollapse = SidebarCollapseController()
     private let panes = ExplorerSplitView()
     private let toolbar = Surface()
     private let headers = Surface()
@@ -62,12 +63,13 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
         ])
         headersHeight = headers.heightAnchor.constraint(equalToConstant: dualPane ? 90 : 54); headersHeight.isActive = true
         headers.onLayout = { [weak self] in self?.layoutHeaders() }
+        sidebarCollapse.install(in: view, split: outer)
         ready = true; syncHeaders()
         activate(restoreRight && dualPane ? right! : left, force: true)
     }
     override func viewDidAppear() {
         super.viewDidAppear(); updateMinimumSize()
-        outer.setPosition(210, ofDividerAt: 0)
+        sidebarCollapse.restorePosition()
         if dualPane { panes.setPosition(panes.bounds.width / 2, ofDividerAt: 0) }
         activate(activeBrowser, force: true); view.window?.makeFirstResponder(activeBrowser.activeFileView)
     }
@@ -163,7 +165,10 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
                                         width: max(0, size.width - leftWidth - panes.dividerThickness), height: size.height)
         }
     }
-    func splitViewDidResizeSubviews(_ notification: Notification) { layoutHeaders() }
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        layoutHeaders()
+        if let split = notification.object as? NSSplitView { sidebarCollapse.noteResize(of: split) }
+    }
     private func updateMinimumSize() {
         guard let window = view.window else { return }
         let width: CGFloat = dualPane ? 1200 : 900
@@ -239,7 +244,10 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
         SessionStore.save(WorkspaceSession(left: left.session, right: right?.session, dualPane: dualPane, activeRight: activeBrowser === right))
     }
     func shutdown() { left.suspend(); right?.suspend() }
-    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { splitView === outer ? 165 : 420 }
+    func splitView(_ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat {
+        if splitView !== outer { return 420 }
+        return sidebarCollapse.isCollapsed ? 0 : SidebarCollapseController.minimumOpenWidth
+    }
     func splitView(_ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int) -> CGFloat { splitView === outer ? min(300, splitView.bounds.width - (dualPane ? 840 : 620)) : splitView.bounds.width - 420 }
     func splitView(_ splitView: NSSplitView, shouldAdjustSizeOfSubview view: NSView) -> Bool { splitView !== outer || view !== sidebar.view }
 }

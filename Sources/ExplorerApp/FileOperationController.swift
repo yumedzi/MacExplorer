@@ -2,7 +2,7 @@ import AppKit
 import ExplorerCore
 
 enum FileAction: String, CaseIterable {
-    case cut, copy, paste, move, rename, newFolder, trash, compress, extract, properties, undo, cancel
+    case cut, copy, paste, move, rename, newFolder, newTextFile, newMarkdownFile, trash, compress, extract, properties, undo, cancel
     var title: String {
         switch self {
         case .cut: "Cut"
@@ -11,6 +11,8 @@ enum FileAction: String, CaseIterable {
         case .move: "Move to Folder…"
         case .rename: "Rename…"
         case .newFolder: "New Folder…"
+        case .newTextFile: "New Text File…"
+        case .newMarkdownFile: "New Markdown File…"
         case .trash: "Move to Trash"
         case .compress: "Compress to ZIP"
         case .extract: "Extract All…"
@@ -154,7 +156,7 @@ final class FileOperationController {
                  submit: @escaping (String) -> Void) {
         guard !busy, window.attachedSheet == nil else { return }
         let alert = NSAlert(); alert.messageText = title
-        alert.addButton(withTitle: title == "New Folder" ? "Create" : "Rename"); alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: title.hasPrefix("New") ? "Create" : "Rename"); alert.addButton(withTitle: "Cancel")
         let field = NSTextField(string: initial); field.frame = NSRect(x: 0, y: 0, width: 340, height: 26)
         field.setAccessibilityLabel("Name"); alert.accessoryView = field; alert.window.initialFirstResponder = field
         alert.beginSheetModal(for: window) { response in

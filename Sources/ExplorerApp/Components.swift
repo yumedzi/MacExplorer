@@ -93,7 +93,7 @@ final class ActionButton: NSButton {
     private var tracking: NSTrackingArea?
     private var hovering = false
     var active = false { didSet { needsDisplay = true } }
-    init(_ title: String = "", symbol: String? = nil, tooltip: String, maximumWidth: CGFloat? = nil, action: @escaping () -> Void) {
+    init(_ title: String = "", symbol: String? = nil, tooltip: String, maximumWidth: CGFloat? = nil, fixedWidth: CGFloat? = nil, action: @escaping () -> Void) {
         super.init(frame: .zero)
         self.title = title; self.toolTip = tooltip; self.actionBlock = action
         self.target = self; self.action = #selector(invoke)
@@ -105,7 +105,8 @@ final class ActionButton: NSButton {
         setAccessibilityLabel(title.isEmpty ? tooltip : title)
         translatesAutoresizingMaskIntoConstraints = false
         heightAnchor.constraint(equalToConstant: 30).isActive = true
-        if title.isEmpty { widthAnchor.constraint(equalToConstant: 32).isActive = true }
+        if let fixedWidth { widthAnchor.constraint(equalToConstant: fixedWidth).isActive = true }
+        else if title.isEmpty { widthAnchor.constraint(equalToConstant: 32).isActive = true }
         else if let maximumWidth { widthAnchor.constraint(equalToConstant: min(intrinsicContentSize.width + 16, maximumWidth)).isActive = true }
         else { widthAnchor.constraint(greaterThanOrEqualToConstant: intrinsicContentSize.width + 16).isActive = true }
     }
@@ -138,7 +139,33 @@ final class FlatMenuButton: NSPopUpButton {
 
 @MainActor
 final class ExplorerSplitView: NSSplitView {
+    var collapsesOnDividerClick = false
+    var onDividerClick: (() -> Void)?
     override var dividerColor: NSColor { Palette.line }
+
+    override func mouseDown(with event: NSEvent) {
+        guard collapsesOnDividerClick, event.clickCount == 1, hitsDivider(event), let window else {
+            super.mouseDown(with: event); return
+        }
+        let start = event.locationInWindow
+        let initial = arrangedSubviews[0].frame.maxX
+        var dragged = false
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { break }
+            let delta = NSPoint(x: next.locationInWindow.x - start.x, y: next.locationInWindow.y - start.y)
+            if hypot(delta.x, delta.y) > 3 { dragged = true }
+            if dragged { setPosition(initial + next.locationInWindow.x - start.x, ofDividerAt: 0) }
+        }
+        if !dragged { onDividerClick?() }
+    }
+
+    private func hitsDivider(_ event: NSEvent) -> Bool {
+        guard isVertical, arrangedSubviews.count > 1 else { return false }
+        let point = convert(event.locationInWindow, from: nil)
+        let edge = arrangedSubviews[0].frame.maxX
+        let rect = NSRect(x: edge - 3, y: bounds.minY, width: dividerThickness + 6, height: bounds.height)
+        return rect.contains(point)
+    }
 }
 
 @MainActor
@@ -358,6 +385,25 @@ final class PathBar: Surface, NSTextFieldDelegate {
         // Keep the typed path until the commit action has handled Return.
         if let movement = obj.userInfo?["NSTextMovement"] as? Int, movement == NSReturnTextMovement { return }
         if editing { update(url, searchResults: searchResults) }
+    }
+}
+
+@MainActor
+final class FileTableScrollView: NSScrollView {
+    private var pinningDocument = false
+
+    /// A table shorter than the clip view is pinned to the bottom of a non-flipped clip.
+    /// Stretch it so the first rows stay at the top after a tab switch into a small folder.
+    override func tile() {
+        super.tile()
+        guard !pinningDocument, let table = documentView as? NSTableView else { return }
+        let minHeight = contentSize.height
+        guard minHeight > 1, table.frame.height + 0.5 < minHeight else { return }
+        pinningDocument = true
+        table.setFrameSize(NSSize(width: table.frame.width, height: minHeight))
+        contentView.scroll(to: NSPoint(x: contentView.bounds.origin.x, y: 0))
+        pinningDocument = false
+        super.tile()
     }
 }
 

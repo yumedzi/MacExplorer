@@ -81,8 +81,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
     var folderDestination: URL? { !tab.isThisMac && !tab.isRecursiveSearch && !tab.loading && tab.error == nil ? tab.history.current : nil }
     let thisMacView = ThisMacView()
     let table = FileTableView()
-    let tableScroll = NSScrollView()
+    let tableScroll = FileTableScrollView()
     var detailsHeaderView: NSTableHeaderView?
+    let columnHeaderMenu = ColumnHeaderMenu()
     var detailColumnWidths: [String: CGFloat] = [:]
     var tableShowsContent = false
     var compactContentRows = false
@@ -109,6 +110,7 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
     var upButton: ActionButton!
     var hiddenButton: ActionButton!
     var operationButtons: [FileAction: ActionButton] = [:]
+    var newFileButton: ActionButton?
     let operations = FileOperationController.shared
     var watcher: DirectoryWatcher?
     var watcherURL: URL?
@@ -180,13 +182,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
 
     override func viewDidAppear() {
         super.viewDidAppear()
-        // Keep metadata columns readable; let only the name column absorb resizing.
-        let metadataWidths = ["modified": CGFloat(185), "kind": CGFloat(100), "size": CGFloat(75)]
-        for column in table.tableColumns {
-            if let width = metadataWidths[column.identifier.rawValue] { column.width = width }
+        ColumnLayout.performWithoutSaving {
+            table.setFrameSize(NSSize(width: max(tableScroll.contentSize.width, 540), height: table.frame.height))
         }
-        table.tableColumns.first?.width = max(180, tableScroll.contentSize.width - 360)
-        table.setFrameSize(NSSize(width: max(tableScroll.contentSize.width, 540), height: table.frame.height))
         updateChrome(); fitContentTable()
         if workspace?.activeBrowser === self { view.window?.makeFirstResponder(activeFileView) }
     }
@@ -228,6 +226,10 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
             operationButtons[action] = button; return button
         }
         let new = button(.newFolder, "folder.badge.plus", "New folder (⇧⌘N or Ctrl+Shift+N)", title: "New")
+        newFileButton = ActionButton(tooltip: "New text or markdown file", fixedWidth: 20) { [weak self] in self?.showNewFileMenu() }
+        newFileButton?.image = Palette.buttonSymbol("chevron.down", size: 8, canvas: 16)
+        newFileButton?.setAccessibilityLabel("New text or markdown file")
+        let newGroup = NSStackView(views: [new, newFileButton!]); newGroup.spacing = 0
         let cut = button(.cut, "scissors", "Cut (⌘X or Ctrl+X)")
         let copy = button(.copy, "doc.on.doc", "Copy (⌘C or Ctrl+C)")
         let paste = button(.paste, "doc.on.clipboard", "Paste (⌘V or Ctrl+V)")
@@ -250,7 +252,7 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         closeSearchButton = ActionButton(symbol: "xmark", tooltip: "Close search") { [weak self] in self?.closeSearch() }
         closeSearchButton.contentTintColor = .systemBlue
         closeSearchWidth = closeSearchButton.constraints.first { $0.firstAttribute == .width }
-        let left = NSStackView(views: [new, separator(), cut, copy, paste, rename, move, trash, separator(), undo, cancel, separator(), sortPicker, viewPicker, searchOptions, closeSearchButton!]); left.spacing = 4
+        let left = NSStackView(views: [newGroup, separator(), cut, copy, paste, rename, move, trash, separator(), undo, cancel, separator(), sortPicker, viewPicker, searchOptions, closeSearchButton!]); left.spacing = 4
         bar.onLayout = { [weak self, weak bar] in self?.layoutSearchTools(width: bar?.bounds.width ?? 0) }
         pinButton = ActionButton(symbol: "pin", tooltip: "Pin current folder (⌘D)") { [weak self] in self?.togglePin() }
         dualButton = ActionButton(symbol: "rectangle.split.2x1", tooltip: "Toggle dual panes (⇧⌘D)") { [weak self] in self?.workspace?.toggleDualPane() }
@@ -346,6 +348,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         table.onFileAction = { [weak self] in self?.performFileAction($0) }
         table.canFileAction = { [weak self] in self?.canPerformFileAction($0) == true }
         let menu = NSMenu(); menu.delegate = self; table.menu = menu
+        columnHeaderMenu.browser = self
+        let headerMenu = NSMenu(); headerMenu.autoenablesItems = false; headerMenu.delegate = columnHeaderMenu
+        detailsHeaderView?.menu = headerMenu
         tableScroll.documentView = table; tableScroll.hasVerticalScroller = true; tableScroll.hasHorizontalScroller = true
         tableScroll.autohidesScrollers = true; tableScroll.drawsBackground = true; tableScroll.backgroundColor = .controlBackgroundColor
     }
@@ -595,6 +600,7 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         if let workspace, workspace.activeBrowser !== self { workspace.activeBrowser.updateTransferButtons() }
         previewButton?.isEnabled = canQuickLook
         for (action, button) in operationButtons { button.isEnabled = canPerformFileAction(action) }
+        newFileButton?.isEnabled = canPerformFileAction(.newTextFile)
         operationButtons[.paste]?.toolTip = operations.cutPaths.isEmpty ? "Paste copies (⌘V or Ctrl+V)" : "Paste moves cut items (⌘V or Ctrl+V)"
         operationButtons[.undo]?.toolTip = operations.undoTitle.map { "Undo \($0) (⌘Z or Ctrl+Z)" } ?? "Nothing to undo"
         if operations.busy {
@@ -757,7 +763,7 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
             }
             menu.addItem(.separator())
         }
-        for action in [FileAction.move, .newFolder, .undo] {
+        for action in [FileAction.move, .newFolder, .newTextFile, .newMarkdownFile, .undo] {
             let title = action == .undo ? operations.undoTitle.map { "Undo \($0)" } ?? "Undo" : action.title
             menu.addItem(ContextMenu.item(title, symbol: action.menuSymbol, enabled: canPerformFileAction(action)) { [weak self] in self?.performFileAction(action) })
         }
@@ -827,11 +833,18 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         case .extract: return canExtractSelection
         case .properties: return false
         case .rename: return selectedItems.count == 1
-        case .newFolder: return folderDestination != nil
+        case .newFolder, .newTextFile, .newMarkdownFile: return folderDestination != nil
         case .paste: return folderDestination != nil && operations.canPaste
         case .undo: return operations.undoTitle != nil
         case .cancel: return false
         }
+    }
+    func showNewFileMenu() {
+        guard let newFileButton, canPerformFileAction(.newTextFile) else { return }
+        let menu = NSMenu(); menu.autoenablesItems = false
+        menu.addItem(ContextMenu.item("Text File", symbol: "doc.text") { [weak self] in self?.performFileAction(.newTextFile) })
+        menu.addItem(ContextMenu.item("Markdown File", symbol: "doc.plaintext") { [weak self] in self?.performFileAction(.newMarkdownFile) })
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: 0), in: newFileButton)
     }
     func performFileAction(_ action: FileAction) {
         guard let window = view.window, window.attachedSheet == nil, canPerformFileAction(action) else { return }
@@ -873,6 +886,15 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
             while names.contains(name.lowercased()) { name = "New folder (\(index))"; index += 1 }
             operations.askName(title: "New Folder", initial: name, selectStem: false, window: window) { [weak self] name in
                 self?.operations.run(.newFolder(in: folder, name: name), window: window)
+            }
+        case .newTextFile, .newMarkdownFile:
+            let ext = action == .newTextFile ? "txt" : "md"
+            let title = action == .newTextFile ? "New Text File" : "New Markdown File"
+            var name = "Untitled.\(ext)", index = 2
+            let names = Set(tab.items.map { $0.name.lowercased() })
+            while names.contains(name.lowercased()) { name = "Untitled (\(index)).\(ext)"; index += 1 }
+            operations.askName(title: title, initial: name, selectStem: true, window: window) { [weak self] name in
+                self?.operations.run(.newFile(in: folder, name: name), window: window)
             }
         case .move:
             let panel = NSOpenPanel(); panel.canChooseFiles = false; panel.canChooseDirectories = true

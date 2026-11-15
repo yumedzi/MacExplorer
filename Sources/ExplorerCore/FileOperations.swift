@@ -6,6 +6,7 @@ public enum FileOperation: Sendable {
     case move([URL], to: URL)
     case rename(URL, to: String)
     case newFolder(in: URL, name: String)
+    case newFile(in: URL, name: String)
     case trash([URL])
     case color([URL], FinderColor)
     case compress([URL], to: URL)
@@ -17,6 +18,7 @@ public enum FileOperation: Sendable {
         case .move: "Move"
         case .rename: "Rename"
         case .newFolder: "New Folder"
+        case .newFile: "New File"
         case .trash: "Trash"
         case .color: "Change Color Label"
         case .compress: "Compress"
@@ -124,7 +126,7 @@ public actor FileOperationEngine {
                 sources = Array(Set(urls.map { canonicalItem($0) })).sorted { $0.path < $1.path }; destinationFolder = nil
             case let .rename(url, name):
                 try Self.validateName(name); sources = [canonicalItem(url)]; destinationFolder = nil
-            case let .newFolder(parent, name):
+            case let .newFolder(parent, name), let .newFile(parent, name):
                 try Self.validateName(name); try FileSystem.validateDirectory(parent)
                 sources = [parent.resolvingSymlinksInPath().appendingPathComponent(name)]; destinationFolder = nil
             case .compress, .extract: fatalError("Handled above")
@@ -147,6 +149,13 @@ public actor FileOperationEngine {
                 if case .newFolder = operation {
                     // mkdir fails if a file appeared at this name; never replace it.
                     try fm.createDirectory(at: source, withIntermediateDirectories: false)
+                    let step = UndoStep.remove(source, try snapshot(source))
+                    record.steps.insert(step, at: 0); report.completed.append(source)
+                    continue
+                }
+                if case .newFile = operation {
+                    // O_EXCL refuses an existing item instead of truncating it.
+                    try createEmptyFile(at: source)
                     let step = UndoStep.remove(source, try snapshot(source))
                     record.steps.insert(step, at: 0); report.completed.append(source)
                     continue
@@ -434,6 +443,12 @@ public actor FileOperationEngine {
         child.path.hasPrefix(parent.path == "/" ? "/" : parent.path + "/")
     }
     private func exists(_ url: URL) -> Bool { (try? fm.attributesOfItem(atPath: url.path)) != nil }
+    private func createEmptyFile(at url: URL) throws {
+        let fd = url.path.withCString { open($0, O_CREAT | O_EXCL | O_WRONLY, mode_t(0o644)) }
+        if fd >= 0 { close(fd); return }
+        if errno == EEXIST { throw FileOperationError("An item named \(url.lastPathComponent) already exists.") }
+        throw FileOperationError("Could not create \(url.lastPathComponent).")
+    }
     private func isCaseOnlyRename(_ lhs: URL, _ rhs: URL) -> Bool {
         lhs.deletingLastPathComponent() == rhs.deletingLastPathComponent() &&
         lhs.lastPathComponent != rhs.lastPathComponent &&

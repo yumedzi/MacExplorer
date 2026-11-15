@@ -36,6 +36,38 @@ struct PreferencesTests {
         #expect(reloaded.showHidden)
     }
 
+    @Test func sidebarAndDetailColumnsRoundTrip() throws {
+        let name = "Explorer.PreferencesTests.\(UUID())"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let preferences = AppPreferences(defaults: defaults)
+        #expect(preferences.sidebarCollapsed == false)
+        #expect(preferences.sidebarWidth == 210)
+        preferences.sidebarCollapsed = true
+        preferences.sidebarWidth = 240
+        preferences.sidebarWidth = 10
+        #expect(preferences.sidebarWidth == 165)
+        preferences.sidebarWidth = 900
+        defaults.set(Data("broken".utf8), forKey: "explorer.columns.details")
+        #expect(preferences.detailColumns == .standard)
+        var layout = DetailColumnLayout.standard
+        layout.hidden = ["name", "kind", "nope"]
+        layout.order = ["size", "name", "bogus", "modified", "name"]
+        layout.widths = ["kind": 10, "nope": 40, "size": 120]
+        preferences.detailColumns = layout
+        let reloaded = AppPreferences(defaults: defaults)
+        #expect(reloaded.sidebarCollapsed)
+        #expect(reloaded.sidebarWidth == 300)
+        let columns = reloaded.detailColumns
+        #expect(columns.hidden == ["kind"])
+        #expect(!columns.order.contains("bogus"))
+        #expect(columns.order == ["size", "name", "modified", "kind", "location", "created"])
+        #expect(columns.widths["kind"] == 60)
+        #expect(columns.widths["size"] == 120)
+        #expect(columns.widths["nope"] == nil)
+        #expect(columns.widths["name"] == 385)
+    }
+
     @Test func corruptedOrUnsafeBindingsFallBackToCommandE() throws {
         let name = "Explorer.PreferencesTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: name))

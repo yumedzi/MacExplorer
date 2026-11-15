@@ -79,8 +79,10 @@ extension BrowserViewController {
         if content != tableShowsContent {
             if content { detailColumnWidths = Dictionary(uniqueKeysWithValues: table.tableColumns.map { ($0.identifier.rawValue, $0.width) }) }
             else {
-                for column in table.tableColumns {
-                    if let width = detailColumnWidths[column.identifier.rawValue] { column.width = width }
+                ColumnLayout.performWithoutSaving {
+                    for column in table.tableColumns {
+                        if let width = detailColumnWidths[column.identifier.rawValue] { column.width = width }
+                    }
                 }
             }
             tableShowsContent = content
@@ -92,14 +94,7 @@ extension BrowserViewController {
             }
             table.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<table.numberOfRows))
         }
-        for column in table.tableColumns {
-            switch column.identifier.rawValue {
-            case "name": column.isHidden = false
-            case "location": column.isHidden = content || !tab.isRecursiveSearch
-            case "created": column.isHidden = content || (tab.sort.key != .created && tab.grouping.key != .created)
-            default: column.isHidden = content
-            }
-        }
+        ColumnLayout.apply(to: table, content: content, showsLocation: tab.isRecursiveSearch)
         table.setAccessibilityLabel(content ? (tab.hasSearchQuery ? "Search results, Content view" : "Files, Content view") : "Files in current folder")
         fitContentTable()
     }

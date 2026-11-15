@@ -60,7 +60,6 @@ extension BrowserViewController: NSCollectionViewDataSource, NSCollectionViewDel
     func updateSortPresentation() {
         let wasSuppressed = suppressSelection; suppressSelection = true
         table.sortDescriptors = [NSSortDescriptor(key: tab.sort.key.rawValue, ascending: tab.sort.ascending)]
-        table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("created"))?.isHidden = viewMode == .content || (tab.sort.key != .created && tab.grouping.key != .created)
         suppressSelection = wasSuppressed
         for item in sortPicker.menu?.items ?? [] {
             if item.action == #selector(changeIconSort(_:)) { item.state = (item.representedObject as? String) == tab.sort.key.rawValue ? .on : .off }
@@ -85,11 +84,6 @@ extension BrowserViewController: NSCollectionViewDataSource, NSCollectionViewDel
         thisMacView.isHidden = !tab.isThisMac
         tableScroll.isHidden = tab.isThisMac || !viewMode.usesTable; collectionScroll.isHidden = tab.isThisMac || viewMode.usesTable
         sortPicker.isEnabled = !tab.isThisMac; viewPicker.isEnabled = !tab.isThisMac; hiddenButton?.isEnabled = !tab.isThisMac
-        table.tableColumn(withIdentifier: NSUserInterfaceItemIdentifier("location"))?.isHidden = !tab.isRecursiveSearch
-        if tab.isRecursiveSearch {
-            let index = table.column(withIdentifier: NSUserInterfaceItemIdentifier("location"))
-            if index != 1 { table.moveColumn(index, toColumn: 1) }
-        }
         var size: NSSize
         switch viewMode {
         case .extraLarge: size = NSSize(width: 208, height: 218)
@@ -107,8 +101,11 @@ extension BrowserViewController: NSCollectionViewDataSource, NSCollectionViewDel
     }
     func restoreScroll() {
         view.layoutSubtreeIfNeeded(); activeFileView.layoutSubtreeIfNeeded()
-        if viewMode.usesTable, (tab.scrollPositions[scrollKey] ?? 0) <= 0, !tab.visible.isEmpty {
-            table.scrollRowToVisible(0); return
+        if viewMode.usesTable {
+            tableScroll.tile()
+            if (tab.scrollPositions[scrollKey] ?? 0) <= 0, !tab.visible.isEmpty {
+                table.scrollRowToVisible(0); return
+            }
         }
         let maxY = max(0, activeFileView.frame.height - activeScroll.contentSize.height)
         let y = min(maxY, max(0, tab.scrollPositions[scrollKey] ?? 0))

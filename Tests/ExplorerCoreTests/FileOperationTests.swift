@@ -206,6 +206,28 @@ final class FileOperationTests: XCTestCase {
         let undo = await engine.undo(); XCTAssertNil(undo.error)
         XCTAssertEqual(try read(source), "original"); XCTAssertFalse(exists(destination))
     }
+    func testNewFileCreatesAnEmptyFileAndUndoRemovesIt() async throws {
+        let root = try fixture(), engine = engine(root)
+        let create = await engine.perform(.newFile(in: root, name: "Untitled.txt"))
+        XCTAssertNil(create.error)
+        let url = try XCTUnwrap(create.completed.first)
+        XCTAssertEqual(try Data(contentsOf: url), Data())
+        let undo = await engine.undo()
+        XCTAssertNil(undo.error)
+        XCTAssertFalse(exists(url))
+    }
+    func testNewFileRejectsBadNamesAndExistingItems() async throws {
+        let root = try fixture(), engine = engine(root)
+        for name in ["", "a/b.txt", "a:b"] {
+            let result = await engine.perform(.newFile(in: root, name: name))
+            XCTAssertNotNil(result.error, name)
+        }
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("a").path))
+        let existing = try file("Source/report.txt", in: root, text: "keep")
+        let clash = await engine.perform(.newFile(in: existing.deletingLastPathComponent(), name: "report.txt"))
+        XCTAssertNotNil(clash.error)
+        XCTAssertEqual(try read(existing), "keep")
+    }
     func testInvalidNamesAndExistingNewFolderAreRejected() async throws {
         for name in ["", "  ", ".", "..", "a/b", "a:b", "a\0b"] { XCTAssertThrowsError(try FileOperationEngine.validateName(name)) }
         let root = try fixture(), engine = engine(root)
