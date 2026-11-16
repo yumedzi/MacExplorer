@@ -463,8 +463,13 @@ final class ExplorerWindowController: NSWindowController, NSWindowDelegate {
             (window as? ExplorerWindow)?.alignWindowControls(with: tab)
         }
     }
-    func windowDidLayout(_ notification: Notification) { updateTitlebarLayout() }
+    func windowDidUpdate(_ notification: Notification) { alignTrafficLights() }
     func windowDidResize(_ notification: Notification) { updateTitlebarLayout() }
+    private func alignTrafficLights() {
+        guard !titlebarAccessory.isHidden,
+              let tab = workspace.left.tabs.first.flatMap({ workspace.left.tabChips[$0.id] }) else { return }
+        (window as? ExplorerWindow)?.alignWindowControls(with: tab)
+    }
     func windowWillEnterFullScreen(_ notification: Notification) {
         // Keep tabs visible when macOS retracts its fullscreen titlebar.
         workspace.embedTitlebarForFullScreen(); titlebarAccessory.isHidden = true

@@ -633,9 +633,15 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         updateSearchMenuState()
         updateTransferButtons()
         if let workspace, workspace.activeBrowser !== self { workspace.activeBrowser.updateTransferButtons() }
-        previewButton?.isEnabled = canQuickLook
-        for (action, button) in operationButtons { button.isEnabled = canPerformFileAction(action) }
-        newFileButton?.isEnabled = canPerformFileAction(.newTextFile)
+        if let previewButton, previewButton.isEnabled != canQuickLook { previewButton.isEnabled = canQuickLook }
+        for (action, button) in operationButtons {
+            let enabled = canPerformFileAction(action)
+            if button.isEnabled != enabled { button.isEnabled = enabled }
+        }
+        if let newFileButton {
+            let enabled = canPerformFileAction(.newTextFile)
+            if newFileButton.isEnabled != enabled { newFileButton.isEnabled = enabled }
+        }
         operationButtons[.paste]?.toolTip = operations.cutPaths.isEmpty ? "Paste copies (⌘V or Ctrl+V)" : "Paste moves cut items (⌘V or Ctrl+V)"
         operationButtons[.undo]?.toolTip = operations.undoTitle.map { "Undo \($0) (⌘Z or Ctrl+Z)" } ?? "Nothing to undo"
         if operations.busy {
@@ -868,7 +874,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         case .extract: return canExtractSelection
         case .properties: return false
         case .rename: return selectedItems.count == 1
-        case .newFolder, .newTextFile, .newMarkdownFile: return folderDestination != nil
+        // A reload sets loading, which hides folderDestination. New stays available
+        // for a real folder so the button does not flash off and on at every tab switch.
+        case .newFolder, .newTextFile, .newMarkdownFile: return !tab.isThisMac && !tab.isRecursiveSearch && tab.error == nil
         case .paste: return folderDestination != nil && operations.canPaste
         case .undo: return operations.undoTitle != nil
         case .cancel: return false

@@ -13,16 +13,40 @@ final class AlignedHeaderCell: NSTableHeaderCell {
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: style
         ]
-        var rect = cellFrame
-        if alignment == .right {
-            rect.size.width = max(0, rect.width - 12)
-        } else {
-            rect.origin.x += textInset
-            rect.size.width = max(0, rect.width - textInset - 4)
-        }
+        let arrow = sortArrow(in: controlView)
+        let arrowGap: CGFloat = arrow == nil ? 0 : 14
         let title = stringValue as NSString
-        let height = title.size(withAttributes: attributes).height
-        title.draw(in: NSRect(x: rect.minX, y: rect.midY - height / 2, width: rect.width, height: height), withAttributes: attributes)
+        let titleSize = title.size(withAttributes: attributes)
+        let titleRect: NSRect
+        if alignment == .right {
+            let textWidth = min(titleSize.width, max(0, cellFrame.width - 12 - arrowGap))
+            titleRect = NSRect(x: cellFrame.maxX - 12 - textWidth, y: cellFrame.midY - titleSize.height / 2, width: textWidth, height: titleSize.height)
+        } else {
+            let textWidth = min(titleSize.width, max(0, cellFrame.width - textInset - 4 - arrowGap))
+            titleRect = NSRect(x: cellFrame.minX + textInset, y: cellFrame.midY - titleSize.height / 2, width: textWidth, height: titleSize.height)
+        }
+        title.draw(in: titleRect, withAttributes: attributes)
+        guard let arrow else { return }
+        let arrowSize = arrow.size
+        let rawX = alignment == .right ? titleRect.minX - 3 - arrowSize.width : titleRect.maxX + 3
+        let x = min(max(cellFrame.minX, rawX), cellFrame.maxX - arrowSize.width)
+        arrow.draw(in: NSRect(x: x, y: cellFrame.midY - arrowSize.height / 2, width: arrowSize.width, height: arrowSize.height),
+                   from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+
+    /// The custom title drawing replaces AppKit's header interior, which is where the sort arrow normally lives.
+    private func sortArrow(in controlView: NSView) -> NSImage? {
+        guard let header = controlView as? NSTableHeaderView,
+              let table = header.tableView,
+              let column = table.tableColumns.first(where: { $0.headerCell === self }),
+              let descriptor = table.sortDescriptors.first,
+              let key = column.sortDescriptorPrototype?.key,
+              descriptor.key == key else { return nil }
+        let symbol = descriptor.ascending ? "chevron.up" : "chevron.down"
+        let configuration = NSImage.SymbolConfiguration(pointSize: 8, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.secondaryLabelColor]))
+        return NSImage(systemSymbolName: symbol, accessibilityDescription: descriptor.ascending ? "Ascending" : "Descending")?
+            .withSymbolConfiguration(configuration)
     }
 }
 
