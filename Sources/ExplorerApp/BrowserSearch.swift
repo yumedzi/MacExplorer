@@ -68,7 +68,9 @@ extension BrowserViewController {
         loadFolder(clear: true); updateSearchControls()
     }
     func closeSearch(focusFiles: Bool = true) {
-        guard !tab.query.isEmpty else {
+        let hadQuery = !tab.query.isEmpty
+        if compactNavigation == true { searchRowOpen = false; applySearchRowVisibility() }
+        guard hadQuery else {
             if focusFiles { view.window?.makeFirstResponder(activeFileView) }
             return
         }

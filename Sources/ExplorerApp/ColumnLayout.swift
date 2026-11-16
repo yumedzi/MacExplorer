@@ -1,5 +1,23 @@
 import AppKit
 
+/// Header titles use the same left inset as the text in the cells under them.
+final class AlignedHeaderCell: NSTableHeaderCell {
+    var textInset: CGFloat = 9
+    override func titleRect(forBounds rect: NSRect) -> NSRect {
+        var title = super.titleRect(forBounds: rect)
+        if alignment == .right {
+            title.size.width = max(0, title.width - 6)
+            return title
+        }
+        let targetX = rect.minX + textInset
+        let shift = targetX - title.minX
+        guard shift > 0 else { return title }
+        title.origin.x = targetX
+        title.size.width = max(0, title.width - shift)
+        return title
+    }
+}
+
 struct DetailColumnLayout: Codable, Equatable {
     var order: [String]
     var hidden: [String]

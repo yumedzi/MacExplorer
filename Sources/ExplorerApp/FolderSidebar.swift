@@ -8,6 +8,7 @@ final class FolderNode: NSObject {
     let symbol: String
     let section: Bool
     var favoriteID: UUID?
+    var ejectable = false
     var finderColors = FinderColorSummary()
     var children: [FolderNode]?
     var loading: Task<[FileItem], Error>?
@@ -30,6 +31,7 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     private var generation = UUID()
     private var selectedURL: URL?
     private var storageIdentity: [String] = []
+    private var favoritesCollapsed = false
 
     override func loadView() {
         let surface = Surface(); surface.color = Palette.sidebar; view = surface
@@ -82,18 +84,24 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         }
         let locations = StorageStore.shared.locations
         var devices = locations.filter { !$0.isNetworkLocation }.map {
-            FolderNode(title: $0.title, url: $0.url, symbol: $0.kind == .internalDrive ? "internaldrive" : "externaldrive")
+            let node = FolderNode(title: $0.title, url: $0.url, symbol: $0.kind == .internalDrive ? "internaldrive" : "externaldrive")
+            node.ejectable = VolumeEject.canEject($0); return node
         }
         if !DemoData.active && !devices.contains(where: { $0.url?.path == "/" }) {
             devices.insert(FolderNode(title: "Macintosh HD", url: URL(fileURLWithPath: "/"), symbol: "internaldrive"), at: 0)
         }
         let networks = locations.filter(\.isNetworkLocation).map {
-            FolderNode(title: $0.title, url: $0.url, symbol: $0.kind == .network ? "network" : "cloud.fill")
+            let node = FolderNode(title: $0.title, url: $0.url, symbol: $0.kind == .network ? "network" : "cloud.fill")
+            node.ejectable = VolumeEject.canEject($0); return node
         }
         roots = [FolderNode(title: "Favorites", url: nil, section: true, children: pins),
                  FolderNode(title: "This Mac", url: BrowserLocation.thisMac, symbol: "desktopcomputer", children: devices)]
         if !networks.isEmpty { roots.append(FolderNode(title: "Network locations", url: nil, section: true, children: networks)) }
-        syncing = true; outline.reloadData(); roots.forEach { outline.expandItem($0) }; syncing = false
+        syncing = true; outline.reloadData()
+        for root in roots {
+            if root.title == "Favorites" && favoritesCollapsed { outline.collapseItem(root) } else { outline.expandItem(root) }
+        }
+        syncing = false
         let colorGeneration = generation
         let colorNodes = roots.flatMap { $0.children ?? [] }.filter { $0.url?.isFileURL == true }
         let urls = colorNodes.compactMap(\.url)
@@ -213,7 +221,18 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         label.textColor = node.section || node.url == nil ? .secondaryLabelColor : .labelColor
         label.translatesAutoresizingMaskIntoConstraints = false; cell.textField = label; cell.addSubview(label)
         let leading: NSLayoutXAxisAnchor
-        if !node.section {
+        if node.section && node.title == "Favorites" {
+            let toggle = NSButton(); toggle.isBordered = false; toggle.imagePosition = .imageOnly
+            toggle.image = NSImage(systemSymbolName: favoritesCollapsed ? "chevron.right" : "chevron.down", accessibilityDescription: favoritesCollapsed ? "Expand Favorites" : "Collapse Favorites")
+            toggle.imageScaling = .scaleProportionallyDown
+            toggle.contentTintColor = .secondaryLabelColor
+            toggle.toolTip = favoritesCollapsed ? "Expand Favorites" : "Collapse Favorites"
+            toggle.target = self; toggle.action = #selector(toggleFavorites)
+            toggle.setAccessibilityLabel(toggle.toolTip)
+            toggle.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(toggle)
+            NSLayoutConstraint.activate([toggle.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), toggle.centerYAnchor.constraint(equalTo: cell.centerYAnchor), toggle.widthAnchor.constraint(equalToConstant: 14), toggle.heightAnchor.constraint(equalToConstant: 14)])
+            leading = toggle.trailingAnchor
+        } else if !node.section {
             let image = NSImageView(image: Palette.symbol(node.symbol) ?? NSImage()); image.translatesAutoresizingMaskIntoConstraints = false
             image.contentTintColor = node.symbol.hasPrefix("folder") ? .systemYellow : node.favoriteID != nil ? (node.symbol == "house.fill" ? .systemOrange : .systemBlue) : .secondaryLabelColor
             if let color = node.finderColors.colors.first { image.contentTintColor = FileColors.color(color) }
@@ -221,12 +240,26 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             NSLayoutConstraint.activate([image.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2), image.centerYAnchor.constraint(equalTo: cell.centerYAnchor), image.widthAnchor.constraint(equalToConstant: 17), image.heightAnchor.constraint(equalToConstant: 17)])
             leading = image.trailingAnchor
         } else { leading = cell.leadingAnchor }
+        var trailingReserve: CGFloat = 5
         if node.favoriteID != nil {
             let pin = NSImageView(image: Palette.symbol("pin.fill", size: 9) ?? NSImage()); pin.contentTintColor = .tertiaryLabelColor
             cell.addSubview(pin); pin.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([pin.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8), pin.centerYAnchor.constraint(equalTo: cell.centerYAnchor), pin.widthAnchor.constraint(equalToConstant: 10), pin.heightAnchor.constraint(equalToConstant: 12)])
+            trailingReserve = 24
         }
-        NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo: leading, constant: 8), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: node.favoriteID == nil ? -5 : -24), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
+        if node.ejectable, let url = node.url {
+            let eject = NSButton(); eject.isBordered = false; eject.imagePosition = .imageOnly
+            eject.image = NSImage(systemSymbolName: "eject", accessibilityDescription: "Eject")
+            eject.imageScaling = .scaleProportionallyDown
+            eject.contentTintColor = .secondaryLabelColor
+            eject.toolTip = "Eject \(node.title)"; eject.setAccessibilityLabel("Eject \(node.title)")
+            eject.target = self; eject.action = #selector(ejectNode(_:))
+            eject.identifier = NSUserInterfaceItemIdentifier(url.path)
+            eject.translatesAutoresizingMaskIntoConstraints = false; cell.addSubview(eject)
+            NSLayoutConstraint.activate([eject.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4), eject.centerYAnchor.constraint(equalTo: cell.centerYAnchor), eject.widthAnchor.constraint(equalToConstant: 18), eject.heightAnchor.constraint(equalToConstant: 16)])
+            trailingReserve = 26
+        }
+        NSLayoutConstraint.activate([label.leadingAnchor.constraint(equalTo: leading, constant: 8), label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -trailingReserve), label.centerYAnchor.constraint(equalTo: cell.centerYAnchor)])
         cell.toolTip = [node.url?.path ?? "", FileColors.description(node.finderColors)].filter { !$0.isEmpty }.joined(separator: "\n")
         return cell
     }
@@ -258,6 +291,7 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         }
         add("Open in New Tab", #selector(openNodeInTab(_:)), value: url)
         add("Open in Other Pane", #selector(openNodeInOtherPane(_:)), value: url)
+        if node.ejectable { add("Eject", #selector(ejectNode(_:)), value: url, symbol: "eject") }
         guard url.isFileURL else { return }
         menu.addItem(ContextMenu.item("Open in New Window", symbol: "macwindow.badge.plus") { (NSApp.delegate as? AppDelegate)?.newWindow(urls: [url]) })
         if let window = view.window { menu.addItem(FileColorMenu.shared.item(urls: [url], summaries: [node.finderColors], window: window)) }
@@ -278,9 +312,40 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             add("Move Favorite Down", #selector(favoriteDown(_:)), value: id, enabled: index + 1 < FavoriteStore.shared.favorites.items.count)
         }
     }
+    @objc private func toggleFavorites() {
+        guard let node = roots.first(where: { $0.section && $0.title == "Favorites" }) else { return }
+        favoritesCollapsed.toggle()
+        syncing = true
+        if favoritesCollapsed { outline.collapseItem(node) } else { outline.expandItem(node) }
+        syncing = false
+        outline.reloadItem(node)
+    }
+    @objc private func ejectNode(_ sender: NSObject) {
+        let url: URL?
+        if let item = sender as? NSMenuItem { url = item.representedObject as? URL }
+        else if let button = sender as? NSButton, let path = button.identifier?.rawValue { url = URL(fileURLWithPath: path) }
+        else { url = nil }
+        guard let url else { return }
+        VolumeEject.eject(url, window: view.window)
+    }
     @objc private func pinNode(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { FavoriteStore.shared.toggle(url) } }
     @objc private func favoriteUp(_ sender: NSMenuItem) { if let id = sender.representedObject as? UUID { FavoriteStore.shared.move(id, by: -1) } }
     @objc private func favoriteDown(_ sender: NSMenuItem) { if let id = sender.representedObject as? UUID { FavoriteStore.shared.move(id, by: 1) } }
     @objc private func openNodeInTab(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { onNewTab?(url) } }
     @objc private func openNodeInOtherPane(_ sender: NSMenuItem) { if let url = sender.representedObject as? URL { onOtherPane?(url) } }
+}
+
+@MainActor
+enum VolumeEject {
+    static func canEject(_ location: StorageLocation) -> Bool {
+        location.url.path != "/" && location.kind != .internalDrive && location.kind != .googleDrive && location.kind != .cloud
+    }
+    static func eject(_ url: URL, window: NSWindow?) {
+        do { try NSWorkspace.shared.unmountAndEjectDevice(at: url) }
+        catch {
+            let alert = NSAlert(error: error)
+            alert.alertStyle = .warning
+            if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        }
+    }
 }

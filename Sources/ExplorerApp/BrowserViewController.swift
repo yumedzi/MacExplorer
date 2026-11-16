@@ -60,6 +60,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
     var navigationWide: [NSLayoutConstraint] = []
     var navigationNarrow: [NSLayoutConstraint] = []
     var compactNavigation: Bool?
+    /// Dual-pane search field is hidden until the path-row search button opens it.
+    var searchRowOpen = false
+    var searchToggle: ActionButton!
     let tabsScroll = TabStripScrollView()
     let tabsDocument = TabStripDocumentView()
     let pathBar = PathBar()
@@ -284,7 +287,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         search.onChange = { [weak self] in self?.searchQueryChanged() }
         search.onSubmit = { [weak self] in self?.submitSearch() }
         search.onClear = { [weak self] in self?.closeSearch(focusFiles: false) }
-        for child in [buttons, pathBar, search] { bar.addSubview(child); child.translatesAutoresizingMaskIntoConstraints = false }
+        searchToggle = ActionButton(symbol: "magnifyingglass", tooltip: "Search this folder") { [weak self] in self?.toggleSearchRow() }
+        searchToggle.isHidden = true
+        for child in [buttons, pathBar, searchToggle!, search] { bar.addSubview(child); child.translatesAutoresizingMaskIntoConstraints = false }
         NSLayoutConstraint.activate([
             buttons.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8), buttons.topAnchor.constraint(equalTo: bar.topAnchor, constant: 10),
             pathBar.leadingAnchor.constraint(equalTo: buttons.trailingAnchor, constant: 7), pathBar.topAnchor.constraint(equalTo: bar.topAnchor, constant: 8), pathBar.heightAnchor.constraint(equalToConstant: 34),
@@ -292,14 +297,37 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
             search.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -10)
         ])
         navigationWide = [search.leadingAnchor.constraint(equalTo: pathBar.trailingAnchor, constant: 10), search.widthAnchor.constraint(equalToConstant: 260), search.centerYAnchor.constraint(equalTo: pathBar.centerYAnchor)]
-        navigationNarrow = [pathBar.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -10), search.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10), search.topAnchor.constraint(equalTo: pathBar.bottomAnchor, constant: 5)]
+        navigationNarrow = [
+            pathBar.trailingAnchor.constraint(equalTo: searchToggle.leadingAnchor, constant: -6),
+            searchToggle.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            searchToggle.centerYAnchor.constraint(equalTo: pathBar.centerYAnchor),
+            search.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
+            search.topAnchor.constraint(equalTo: pathBar.bottomAnchor, constant: 5)
+        ]
         configureNavigation(compact: false)
         return bar
     }
     func configureNavigation(compact: Bool) {
-        guard compactNavigation != compact else { return }
-        NSLayoutConstraint.deactivate(navigationWide + navigationNarrow)
-        NSLayoutConstraint.activate(compact ? navigationNarrow : navigationWide); compactNavigation = compact
+        if compactNavigation != compact {
+            NSLayoutConstraint.deactivate(navigationWide + navigationNarrow)
+            NSLayoutConstraint.activate(compact ? navigationNarrow : navigationWide)
+            compactNavigation = compact
+            if compact, !tab.query.isEmpty { searchRowOpen = true }
+            if !compact { searchRowOpen = false }
+        }
+        applySearchRowVisibility()
+    }
+    func toggleSearchRow() {
+        if searchRowOpen, tab.query.isEmpty { searchRowOpen = false; applySearchRowVisibility(); return }
+        if searchRowOpen { closeSearch(); return }
+        searchRowOpen = true; applySearchRowVisibility(); focusFilter()
+    }
+    func applySearchRowVisibility() {
+        let showField = compactNavigation != true || searchRowOpen
+        search.isHidden = !showField
+        searchToggle?.isHidden = compactNavigation != true
+        searchToggle?.active = searchRowOpen
+        workspace?.refreshHeaderHeight()
     }
     func buildFooter() -> NSView {
         let bar = Surface(); bar.color = .controlBackgroundColor
@@ -332,10 +360,14 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         for (key, title, width) in [("name", "Name", 385.0), ("modified", "Date modified", 185.0), ("kind", "Type", 140.0), ("size", "Size", 85.0), ("location", "Folder", 180.0), ("created", "Date created", 185.0)] {
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(key))
             column.title = title; column.width = width; column.minWidth = key == "name" ? 160 : 60
-            column.headerCell.font = .systemFont(ofSize: 11)
+            let header = AlignedHeaderCell(textCell: title)
+            // Name text starts after the 18pt icon (12 + 18 + 9). Other columns start 9pt in.
+            header.textInset = key == "name" ? 39 : 9
+            header.font = .systemFont(ofSize: 11)
+            header.alignment = key == "size" ? .right : .left
+            column.headerCell = header
             if key != "location" { column.sortDescriptorPrototype = NSSortDescriptor(key: key, ascending: true) }
             column.isHidden = key == "location" || key == "created"
-            if key == "size" { column.headerCell.alignment = .right }
             table.addTableColumn(column)
         }
         // Set the restored order before installing the delegate: initialization
@@ -492,7 +524,10 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
         else if let parent = tab.history.parent { navigate(parent) }
     }
     func editPath() { pathBar.beginEditing() }
-    func focusFilter() { search.focus() }
+    func focusFilter() {
+        if compactNavigation == true, !searchRowOpen { searchRowOpen = true; applySearchRowVisibility() }
+        search.focus()
+    }
     func refresh(clearThumbnails: Bool = true) {
         if tab.isThisMac { StorageStore.shared.refresh(); return }
         rememberSelection(); iconCache.removeAllObjects()

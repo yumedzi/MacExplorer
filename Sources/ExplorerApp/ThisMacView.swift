@@ -66,9 +66,17 @@ private final class StorageCard: NSCollectionViewItem {
     private let subtitle = NSTextField(labelWithString: "")
     private let capacityLabel = NSTextField(labelWithString: "")
     private let bar = CapacityBar()
+    private let eject = NSButton()
+    private var onEject: (() -> Void)?
     override func loadView() {
         view = StorageTile()
-        for child in [picture, name, subtitle, bar, capacityLabel] { view.addSubview(child) }
+        eject.isBordered = false; eject.imagePosition = .imageOnly
+        eject.image = NSImage(systemSymbolName: "eject", accessibilityDescription: "Eject")
+        eject.imageScaling = .scaleProportionallyDown
+        eject.contentTintColor = .secondaryLabelColor
+        eject.target = self; eject.action = #selector(ejectPressed)
+        eject.toolTip = "Eject"; eject.isHidden = true
+        for child in [picture, name, subtitle, bar, capacityLabel, eject] { view.addSubview(child) }
         picture.imageScaling = .scaleProportionallyUpOrDown
         name.font = .systemFont(ofSize: 13); subtitle.font = .systemFont(ofSize: 10)
         capacityLabel.font = .systemFont(ofSize: 11)
@@ -81,12 +89,14 @@ private final class StorageCard: NSCollectionViewItem {
         super.viewDidLayout()
         picture.frame = NSRect(x: 10, y: 22, width: 48, height: 48)
         let x: CGFloat = 70, width = max(0, view.bounds.width - 82)
-        name.frame = NSRect(x: x, y: 8, width: width, height: 20)
+        eject.frame = NSRect(x: view.bounds.width - 28, y: 6, width: 20, height: 18)
+        let nameWidth = eject.isHidden ? width : max(0, width - 22)
+        name.frame = NSRect(x: x, y: 8, width: nameWidth, height: 20)
         subtitle.frame = NSRect(x: x, y: 29, width: width, height: 15)
         bar.frame = NSRect(x: x, y: 49, width: width, height: 13)
         capacityLabel.frame = NSRect(x: x, y: bar.isHidden ? 48 : 66, width: width, height: 17)
     }
-    func configure(_ location: StorageLocation, query: String, onSelect: @escaping () -> Void) {
+    func configure(_ location: StorageLocation, query: String, onSelect: @escaping () -> Void, onEject: (() -> Void)? = nil) {
         loadViewIfNeeded()
         SearchHighlight.apply(location.title, to: name, query: query)
         SearchHighlight.apply(location.detail, to: subtitle, query: query, color: .secondaryLabelColor)
@@ -99,6 +109,9 @@ private final class StorageCard: NSCollectionViewItem {
             capacityLabel.stringValue = location.kind == .googleDrive || location.kind == .cloud ? "Cloud storage" : "Storage information unavailable"
             capacityLabel.textColor = .secondaryLabelColor
         }
+        self.onEject = onEject
+        eject.isHidden = onEject == nil
+        eject.setAccessibilityLabel("Eject \(location.title)")
         let tile = view as! StorageTile
         tile.onPress = onSelect
         tile.dropDestination = location.readOnly ? nil : { location.url }
@@ -107,6 +120,7 @@ private final class StorageCard: NSCollectionViewItem {
         view.setAccessibilityHelp("Double-click or press Return to open this location.")
         view.needsLayout = true
     }
+    @objc private func ejectPressed() { onEject?() }
 }
 
 @MainActor
@@ -177,7 +191,9 @@ final class ThisMacView: NSView, NSCollectionViewDataSource, NSCollectionViewDel
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { collapsed.contains(sections[section].0) ? 0 : sections[section].1.count }
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt path: IndexPath) -> NSCollectionViewItem {
         let card = collectionView.makeItem(withIdentifier: StorageCard.identifier, for: path) as! StorageCard
-        if let location = location(path) { card.configure(location, query: query) { [weak self] in self?.collection.selectionIndexPaths = [path]; self?.window?.makeFirstResponder(self?.collection); self?.onSelection?() } }
+        if let location = location(path) {
+            card.configure(location, query: query, onSelect: { [weak self] in self?.collection.selectionIndexPaths = [path]; self?.window?.makeFirstResponder(self?.collection); self?.onSelection?() }, onEject: VolumeEject.canEject(location) ? { [weak self] in VolumeEject.eject(location.url, window: self?.window) } : nil)
+        }
         return card
     }
     func collectionView(_ collectionView: NSCollectionView, layout collectionViewLayout: NSCollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> NSSize {
@@ -209,6 +225,9 @@ final class ThisMacView: NSView, NSCollectionViewDataSource, NSCollectionViewDel
             item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title); menu.addItem(item)
         }
         menu.addItem(ContextMenu.item("Open in New Window", symbol: "macwindow.badge.plus") { (NSApp.delegate as? AppDelegate)?.newWindow(urls: [location.url]) })
+        if VolumeEject.canEject(location) {
+            menu.addItem(ContextMenu.item("Eject", symbol: "eject") { [weak self] in VolumeEject.eject(location.url, window: self?.window) })
+        }
         menu.addItem(.separator())
         menu.addItem(ContextMenu.item("Copy as Path", symbol: "link") { [weak self] in self?.copyPath() })
         menu.addItem(ExternalApplications.terminalItem(folder: location.url, window: window))

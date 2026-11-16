@@ -61,7 +61,7 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
             outer.topAnchor.constraint(equalTo: toolbar.bottomAnchor), outer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             outer.leadingAnchor.constraint(equalTo: view.leadingAnchor), outer.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
-        headersHeight = headers.heightAnchor.constraint(equalToConstant: dualPane ? 90 : 54); headersHeight.isActive = true
+        headersHeight = headers.heightAnchor.constraint(equalToConstant: 54); headersHeight.isActive = true
         headers.onLayout = { [weak self] in self?.layoutHeaders() }
         sidebarCollapse.install(in: view, split: outer)
         ready = true; syncHeaders()
@@ -111,7 +111,6 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
     }
     private func syncHeaders() {
         guard ready else { return }
-        headersHeight.constant = dualPane ? 90 : 54
         for browser in [left, dualPane ? right : nil].compactMap({ $0 }) {
             if browser.headerView.superview !== headers { headers.addSubview(browser.headerView) }
             if let tabBar = browser.tabBar, tabBar.superview !== titlebarTabs { titlebarTabs.addSubview(tabBar) }
@@ -119,7 +118,13 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
             browser.tabBarLeading?.constant = 8
             browser.configureNavigation(compact: dualPane)
         }
-        headers.needsLayout = true; layoutHeaders()
+        headers.needsLayout = true; layoutHeaders(); refreshHeaderHeight()
+    }
+    func refreshHeaderHeight() {
+        guard ready else { return }
+        let showSearch = dualPane && [left, right].compactMap { $0 }.contains { $0.searchRowOpen }
+        let next: CGFloat = dualPane && showSearch ? 90 : 54
+        if headersHeight.constant != next { headersHeight.constant = next }
     }
     private func layoutHeaders() {
         guard ready else { return }
