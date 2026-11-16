@@ -305,15 +305,18 @@ final class BrowserTabView: FolderDropSurface {
 }
 
 @MainActor
-final class PathBar: Surface, NSTextFieldDelegate {
+final class PathBar: Surface, NSTextFieldDelegate, NSGestureRecognizerDelegate {
     var onNavigate: ((URL) -> Void)?
     var onCommit: ((String) -> Void)?
     private let crumbs = NSStackView()
     private let field = NSTextField()
+    private let edit: ActionButton
     private var url = FileManager.default.homeDirectoryForCurrentUser
     private var editing = false
+    private var openingEditor = false
     private var searchResults: String?
     override init(frame: NSRect) {
+        edit = ActionButton(symbol: "pencil", tooltip: "Edit folder path (⌘L)") { }
         super.init(frame: frame)
         color = .controlBackgroundColor; wantsLayer = true; layer?.cornerRadius = 5
         layer?.borderWidth = 0.5; layer?.borderColor = Palette.line.cgColor
@@ -321,19 +324,36 @@ final class PathBar: Surface, NSTextFieldDelegate {
         field.isBordered = false; field.drawsBackground = false; field.font = .systemFont(ofSize: 12)
         field.delegate = self; field.target = self; field.action = #selector(commit)
         field.setAccessibilityLabel("Folder path"); field.isHidden = true
-        let edit = ActionButton(symbol: "pencil", tooltip: "Edit folder path (⌘L)") { [weak self] in self?.beginEditing() }
+        edit.actionBlock = { [weak self] in self?.beginEditing() }
         for view in [crumbs, field, edit] { addSubview(view); view.translatesAutoresizingMaskIntoConstraints = false }
         NSLayoutConstraint.activate([
             edit.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2), edit.centerYAnchor.constraint(equalTo: centerYAnchor),
             crumbs.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7), crumbs.trailingAnchor.constraint(lessThanOrEqualTo: edit.leadingAnchor), crumbs.centerYAnchor.constraint(equalTo: centerYAnchor),
             field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12), field.trailingAnchor.constraint(equalTo: edit.leadingAnchor, constant: -4), field.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
-        let click = NSClickGestureRecognizer(target: self, action: #selector(editClicked)); click.numberOfClicksRequired = 2
+        let click = NSClickGestureRecognizer(target: self, action: #selector(editClicked))
+        click.numberOfClicksRequired = 2
+        click.delegate = self
         addGestureRecognizer(click)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func editClicked() { beginEditing() }
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
+        let local = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(local) else { return false }
+        if edit.frame.contains(local) { return false }
+        guard let superview else { return true }
+        let hit = super.hitTest(superview.convert(event.locationInWindow, from: nil))
+        if let control = hit as? NSControl, control !== field { return false }
+        return true
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+        if !edit.isHidden, edit.frame.contains(local) { return edit.hitTest(local) ?? edit }
+        return super.hitTest(point)
+    }
     func update(_ url: URL, searchResults: String? = nil) {
+        guard !editing else { return }
         self.searchResults = searchResults
         self.url = url; field.stringValue = BrowserLocation.isThisMac(url) ? "This Mac" : url.path
         editing = false; field.isHidden = true; crumbs.isHidden = false
@@ -356,9 +376,10 @@ final class PathBar: Surface, NSTextFieldDelegate {
         while current.path != "/" { chain.insert(current, at: 0); current.deleteLastPathComponent() }
         let root = ActionButton(symbol: "internaldrive", tooltip: "/") { [weak self] in self?.onNavigate?(URL(fileURLWithPath: "/")) }
         crumbs.addArrangedSubview(root)
-        if chain.count > 2 {
+        let visibleParts = 4
+        if chain.count > visibleParts {
             let ellipsis = ActionButton("…", tooltip: "Edit full path") { [weak self] in self?.beginEditing() }
-            crumbs.addArrangedSubview(ellipsis); chain = Array(chain.suffix(2))
+            crumbs.addArrangedSubview(ellipsis); chain = Array(chain.suffix(visibleParts))
         }
         for component in chain {
             let chevron = NSImageView(image: Palette.symbol("chevron.right", size: 9) ?? NSImage())
@@ -370,21 +391,38 @@ final class PathBar: Surface, NSTextFieldDelegate {
         }
     }
     func beginEditing() {
-        editing = true; crumbs.isHidden = true; field.isHidden = false
-        field.stringValue = BrowserLocation.isThisMac(url) ? "This Mac" : url.path; window?.makeFirstResponder(field); field.selectText(nil)
+        editing = true; openingEditor = true
+        crumbs.isHidden = true; field.isHidden = false
+        field.stringValue = BrowserLocation.isThisMac(url) ? "This Mac" : url.path
+        // The click that opened the field otherwise ends editing before the user can type.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            defer { self.openingEditor = false }
+            guard self.editing else { return }
+            self.window?.makeFirstResponder(self.field)
+            self.field.selectText(nil)
+        }
     }
     @objc private func commit() {
-        let text = field.stringValue; window?.makeFirstResponder(nil)
+        let text = field.stringValue
+        editing = false; openingEditor = false
+        window?.makeFirstResponder(nil)
         onCommit?(text)
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        if commandSelector == #selector(NSResponder.cancelOperation(_:)) { update(url, searchResults: searchResults); window?.makeFirstResponder(nil); return true }
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            editing = false; openingEditor = false
+            update(url, searchResults: searchResults); window?.makeFirstResponder(nil); return true
+        }
         return false
     }
     func controlTextDidEndEditing(_ obj: Notification) {
+        if openingEditor { return }
         // Keep the typed path until the commit action has handled Return.
         if let movement = obj.userInfo?["NSTextMovement"] as? Int, movement == NSReturnTextMovement { return }
-        if editing { update(url, searchResults: searchResults) }
+        guard editing else { return }
+        editing = false
+        update(url, searchResults: searchResults)
     }
 }
 

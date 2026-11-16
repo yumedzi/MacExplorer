@@ -1,6 +1,6 @@
 import AppKit
 
-/// Click the sidebar divider to collapse it. Hover the leading edge to restore the last width.
+/// Click the sidebar divider to collapse it. The same hover line marks the open divider and the collapsed edge.
 @MainActor
 final class SidebarCollapseController {
     static let minimumOpenWidth: CGFloat = 165
@@ -8,9 +8,11 @@ final class SidebarCollapseController {
     static let defaultWidth: CGFloat = 210
 
     private let reveal = SidebarRevealStrip()
+    private var revealLeading: NSLayoutConstraint!
     private weak var split: ExplorerSplitView?
     private var collapsed: Bool
     private var savedWidth: CGFloat
+    private var dragOrigin: CGFloat = 0
     private var adjusting = false
     private var positioned = false
     private nonisolated(unsafe) var preferenceObserver: NSObjectProtocol?
@@ -27,11 +29,16 @@ final class SidebarCollapseController {
         split.collapsesOnDividerClick = true
         split.onDividerClick = { [weak self] in self?.close() }
         reveal.translatesAutoresizingMaskIntoConstraints = false
-        reveal.isHidden = !collapsed
-        reveal.onHover = { [weak self] in self?.open() }
+        reveal.onClick = { [weak self] in
+            guard let self else { return }
+            if self.collapsed { self.open() } else { self.close() }
+        }
+        reveal.onDragBegan = { [weak self] in self?.beginDividerDrag() }
+        reveal.onDrag = { [weak self] delta in self?.dragDivider(by: delta) }
         host.addSubview(reveal)
+        revealLeading = reveal.leadingAnchor.constraint(equalTo: split.leadingAnchor)
         NSLayoutConstraint.activate([
-            reveal.leadingAnchor.constraint(equalTo: split.leadingAnchor),
+            revealLeading,
             reveal.topAnchor.constraint(equalTo: split.topAnchor),
             reveal.bottomAnchor.constraint(equalTo: split.bottomAnchor),
             reveal.widthAnchor.constraint(equalToConstant: 6)
@@ -45,25 +52,25 @@ final class SidebarCollapseController {
         guard split != nil else { return }
         positioned = true
         applyPosition(collapsed ? 0 : savedWidth)
-        reveal.isHidden = !collapsed
+        placeReveal()
     }
 
     func noteResize(of split: NSSplitView) {
         guard positioned, !adjusting, split === self.split, let pane = split.arrangedSubviews.first else { return }
         let width = pane.frame.width
         if width < Self.minimumOpenWidth - 1 {
-            guard !collapsed else { reveal.isHidden = false; return }
-            collapsed = true
-            reveal.isHidden = false
-            writePreferences()
+            if !collapsed {
+                collapsed = true
+                writePreferences()
+            }
         } else {
             let clamped = min(Self.maximumWidth, max(Self.minimumOpenWidth, width))
             let changed = collapsed || abs(savedWidth - clamped) > 0.5
             collapsed = false
             savedWidth = clamped
-            reveal.isHidden = true
             if changed { writePreferences() }
         }
+        placeReveal()
     }
 
     func close() {
@@ -73,7 +80,7 @@ final class SidebarCollapseController {
         collapsed = true
         writePreferences()
         applyPosition(0)
-        reveal.isHidden = false
+        placeReveal()
     }
 
     func open() {
@@ -81,7 +88,24 @@ final class SidebarCollapseController {
         collapsed = false
         writePreferences()
         applyPosition(savedWidth)
-        reveal.isHidden = true
+        placeReveal()
+    }
+
+    private func beginDividerDrag() {
+        guard !collapsed, let pane = split?.arrangedSubviews.first else { return }
+        dragOrigin = pane.frame.maxX
+    }
+
+    private func dragDivider(by delta: CGFloat) {
+        guard !collapsed else { return }
+        split?.setPosition(dragOrigin + delta, ofDividerAt: 0)
+    }
+
+    private func placeReveal() {
+        guard let pane = split?.arrangedSubviews.first else { return }
+        let atEdge = pane.frame.width < Self.minimumOpenWidth - 1
+        revealLeading.constant = atEdge ? 0 : pane.frame.maxX
+        reveal.usesResizeCursor = !atEdge
     }
 
     private func applyPosition(_ position: CGFloat) {
@@ -100,7 +124,7 @@ final class SidebarCollapseController {
         savedWidth = nextWidth
         guard positioned else { return }
         applyPosition(collapsed ? 0 : savedWidth)
-        reveal.isHidden = !collapsed
+        placeReveal()
     }
 
     private func writePreferences() {
@@ -116,9 +140,11 @@ final class SidebarCollapseController {
 
 @MainActor
 private final class SidebarRevealStrip: NSView {
-    var onHover: (() -> Void)?
+    var onClick: (() -> Void)?
+    var onDragBegan: (() -> Void)?
+    var onDrag: ((CGFloat) -> Void)?
+    var usesResizeCursor = false { didSet { if usesResizeCursor != oldValue { window?.invalidateCursorRects(for: self) } } }
     private var tracking: NSTrackingArea?
-    private var hoverTask: Task<Void, Never>?
     private var hovering = false
 
     override func updateTrackingAreas() {
@@ -128,21 +154,34 @@ private final class SidebarRevealStrip: NSView {
         super.updateTrackingAreas()
     }
 
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: usesResizeCursor ? .resizeLeftRight : .pointingHand)
+    }
+
     override func mouseEntered(with event: NSEvent) {
         hovering = true
         needsDisplay = true
-        hoverTask?.cancel()
-        hoverTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-            self?.onHover?()
-        }
     }
 
     override func mouseExited(with event: NSEvent) {
         hovering = false
         needsDisplay = true
-        hoverTask?.cancel()
-        hoverTask = nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        let start = event.locationInWindow
+        var dragged = false
+        var began = false
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { break }
+            if hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) > 3 { dragged = true }
+            if dragged {
+                if !began { began = true; onDragBegan?() }
+                onDrag?(next.locationInWindow.x - start.x)
+            }
+        }
+        if !dragged { onClick?() }
     }
 
     override func draw(_ dirtyRect: NSRect) {

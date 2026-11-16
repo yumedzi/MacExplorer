@@ -1,7 +1,7 @@
 name: Build and test
 on:
   push:
-    branches: [main]
+    branches: [local]
   pull_request:
 permissions:
   contents: read
