@@ -87,6 +87,21 @@ class TitlebarSurface: Surface {
     }
 }
 
+/// Accessory host whose height stays fixed so tab switches cannot resize the titlebar.
+@MainActor
+final class LockedTitlebarHost: TitlebarSurface {
+    static let rowHeight: CGFloat = 44
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: Self.rowHeight)
+    }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setContentHuggingPriority(.required, for: .vertical)
+        setContentCompressionResistancePriority(.required, for: .vertical)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
 @MainActor
 final class ActionButton: NSButton {
     var actionBlock: (() -> Void)?

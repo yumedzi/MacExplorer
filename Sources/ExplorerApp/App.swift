@@ -1,6 +1,7 @@
 import AppKit
 import ExplorerCore
 import Quartz
+import QuartzCore
 
 @main
 struct ExplorerMain {
@@ -313,16 +314,37 @@ final class ExplorerWindow: NSWindow {
     weak var workspace: WorkspaceViewController?
     weak var tabStripView: NSView?
     private weak var pressedTab: BrowserTabView?
+    func setTitleWithoutChromeAnimation(_ title: String) {
+        guard self.title != title else { return }
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        NSAnimationContext.current.allowsImplicitAnimation = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.title = title
+        CATransaction.commit()
+        NSAnimationContext.endGrouping()
+        standardWindowButton(.closeButton)?.superview?.layer?.removeAllAnimations()
+    }
     func alignWindowControls(with tabView: NSView) {
         guard !styleMask.contains(.fullScreen), tabView.window === self, tabView.bounds.height > 0 else { return }
         // Keep the real AppKit controls, horizontal spacing and native actions.
         // Convert from the tab body so its top padding is included in alignment.
+        // Corrections under half a point fight AppKit's own layout and make the buttons bounce.
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        NSAnimationContext.current.allowsImplicitAnimation = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
             guard let button = standardWindowButton(kind), let parent = button.superview else { continue }
             let center = parent.convert(NSPoint(x: tabView.bounds.midX, y: tabView.bounds.midY), from: tabView)
             let y = center.y - button.frame.height / 2
-            if abs(button.frame.minY - y) > 0.01 { button.setFrameOrigin(NSPoint(x: button.frame.minX, y: y)) }
+            if abs(button.frame.minY - y) > 0.5 { button.setFrameOrigin(NSPoint(x: button.frame.minX, y: y)) }
         }
+        CATransaction.commit()
+        NSAnimationContext.endGrouping()
+        standardWindowButton(.closeButton)?.superview?.layer?.removeAllAnimations()
     }
     func contentHit(at location: NSPoint) -> NSView? {
         // Native titlebar accessories live outside contentView's hierarchy.
@@ -397,7 +419,7 @@ final class ExplorerWindowController: NSWindowController, NSWindowDelegate {
     var browser: BrowserViewController { workspace.activeBrowser }
     var onClose: (() -> Void)?
     let titlebarAccessory = NSTitlebarAccessoryViewController()
-    private var titlebarLayoutPending = false
+    private var titlebarLayoutInProgress = false
     init(session: WorkspaceSession, initialBrowser: BrowserViewController? = nil) {
         workspace = WorkspaceViewController(session: session, initialBrowser: initialBrowser)
         let window = ExplorerWindow(contentRect: NSRect(x: 0, y: 0, width: 1160, height: 760),
@@ -418,7 +440,7 @@ final class ExplorerWindowController: NSWindowController, NSWindowDelegate {
         // .top is supported by AppKit since macOS 10.13 and requires
         // .fullSizeContentView. AppKit owns its hit region and traffic-light gap.
         titlebarAccessory.layoutAttribute = .top
-        titlebarAccessory.view = TitlebarSurface(frame: NSRect(x: 0, y: 0, width: 1160, height: 44))
+        titlebarAccessory.view = LockedTitlebarHost(frame: NSRect(x: 0, y: 0, width: 1160, height: LockedTitlebarHost.rowHeight))
         window.addTitlebarAccessoryViewController(titlebarAccessory)
         workspace.installTitlebar(in: titlebarAccessory.view)
         window.tabStripView = workspace.titlebarTabs
@@ -431,6 +453,9 @@ final class ExplorerWindowController: NSWindowController, NSWindowDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func updateTitlebarLayout() {
+        guard !titlebarLayoutInProgress else { return }
+        titlebarLayoutInProgress = true
+        defer { titlebarLayoutInProgress = false }
         workspace.updateTitlebarLayout()
         workspace.titlebarTabs.layoutSubtreeIfNeeded()
         if !titlebarAccessory.isHidden,
@@ -438,18 +463,8 @@ final class ExplorerWindowController: NSWindowController, NSWindowDelegate {
             (window as? ExplorerWindow)?.alignWindowControls(with: tab)
         }
     }
-    private func scheduleTitlebarLayout() {
-        guard !titlebarLayoutPending else { return }
-        titlebarLayoutPending = true
-        // AppKit may resize its accessory during this update pass.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.titlebarLayoutPending = false
-            self.updateTitlebarLayout()
-        }
-    }
-    func windowDidUpdate(_ notification: Notification) { scheduleTitlebarLayout() }
-    func windowDidResize(_ notification: Notification) { scheduleTitlebarLayout() }
+    func windowDidLayout(_ notification: Notification) { updateTitlebarLayout() }
+    func windowDidResize(_ notification: Notification) { updateTitlebarLayout() }
     func windowWillEnterFullScreen(_ notification: Notification) {
         // Keep tabs visible when macOS retracts its fullscreen titlebar.
         workspace.embedTitlebarForFullScreen(); titlebarAccessory.isHidden = true
@@ -458,12 +473,12 @@ final class ExplorerWindowController: NSWindowController, NSWindowDelegate {
     func windowDidExitFullScreen(_ notification: Notification) {
         window?.toolbar?.isVisible = true
         titlebarAccessory.isHidden = false; workspace.installTitlebar(in: titlebarAccessory.view)
-        scheduleTitlebarLayout()
+        updateTitlebarLayout()
     }
     func windowDidFailToEnterFullScreen(_ window: NSWindow) {
         window.toolbar?.isVisible = true
         titlebarAccessory.isHidden = false; workspace.installTitlebar(in: titlebarAccessory.view)
-        scheduleTitlebarLayout()
+        updateTitlebarLayout()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if FileOperationController.shared.busy { NSSound.beep(); return false }

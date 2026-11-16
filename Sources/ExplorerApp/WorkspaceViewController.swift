@@ -148,13 +148,16 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
     }
     func updateTitlebarLayout() {
         guard ready else { return }
-        if titlebarInContent { titlebarTabs.frame = NSRect(x: 0, y: 0, width: view.bounds.width, height: 44) }
-        let inset: CGFloat
-        if titlebarInContent { inset = 44 }
+        if titlebarInContent { titlebarTabs.frame = NSRect(x: 0, y: 0, width: view.bounds.width, height: LockedTitlebarHost.rowHeight) }
+        let measured: CGFloat
+        if titlebarInContent { measured = LockedTitlebarHost.rowHeight }
         else if titlebarTabs.window != nil, titlebarTabs.window === view.window {
-            inset = max(0, view.convert(titlebarTabs.bounds, from: titlebarTabs).maxY)
-        } else { inset = 32 }
-        if headersTop.constant != inset { headersTop.constant = inset }
+            measured = max(0, view.convert(titlebarTabs.bounds, from: titlebarTabs).maxY)
+        } else { measured = headersTop.constant }
+        // A zero or partial titlebar frame is an in-flight measurement. Keep the
+        // last good inset so the command bar does not follow that animation.
+        let inset = measured >= 1 ? measured : max(headersTop.constant, 32)
+        if abs(headersTop.constant - inset) >= 1 { headersTop.constant = inset }
         layoutTitlebarTabs()
     }
     private func layoutTitlebarTabs() {
@@ -230,10 +233,10 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
     func updateWindowTitle() {
         guard ready else { return }
         let browser = activeBrowser
-        view.window?.title = "\(browser.tabTitle(browser.tab)) — Explorer"
         // The native document proxy asks IconServices to synchronously enumerate
         // the folder. Protected or unavailable locations can stall window launch.
         // The address bar supplies the path without that main-thread filesystem IO.
+        (view.window as? ExplorerWindow)?.setTitleWithoutChromeAnimation("\(browser.tabTitle(browser.tab)) — Explorer")
     }
     func syncSidebar(from browser: BrowserViewController) {
         guard ready, browser === activeBrowser else { return }
