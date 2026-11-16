@@ -1,20 +1,28 @@
 import AppKit
 
 /// Header titles use the same left inset as the text in the cells under them.
+/// NSTableHeaderCell draws its title from a private rect, so titleRect changes never show up.
 final class AlignedHeaderCell: NSTableHeaderCell {
     var textInset: CGFloat = 9
-    override func titleRect(forBounds rect: NSRect) -> NSRect {
-        var title = super.titleRect(forBounds: rect)
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        style.alignment = alignment
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? .systemFont(ofSize: 11),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: style
+        ]
+        var rect = cellFrame
         if alignment == .right {
-            title.size.width = max(0, title.width - 6)
-            return title
+            rect.size.width = max(0, rect.width - 12)
+        } else {
+            rect.origin.x += textInset
+            rect.size.width = max(0, rect.width - textInset - 4)
         }
-        let targetX = rect.minX + textInset
-        let shift = targetX - title.minX
-        guard shift > 0 else { return title }
-        title.origin.x = targetX
-        title.size.width = max(0, title.width - shift)
-        return title
+        let title = stringValue as NSString
+        let height = title.size(withAttributes: attributes).height
+        title.draw(in: NSRect(x: rect.minX, y: rect.midY - height / 2, width: rect.width, height: height), withAttributes: attributes)
     }
 }
 

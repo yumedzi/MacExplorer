@@ -361,8 +361,8 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
             let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(key))
             column.title = title; column.width = width; column.minWidth = key == "name" ? 160 : 60
             let header = AlignedHeaderCell(textCell: title)
-            // Name text starts after the 18pt icon (12 + 18 + 9). Other columns start 9pt in.
-            header.textInset = key == "name" ? 39 : 9
+            // Name lines up with the file icon. Other columns line up with their text.
+            header.textInset = key == "name" ? 12 : 9
             header.font = .systemFont(ofSize: 11)
             header.alignment = key == "size" ? .right : .left
             column.headerCell = header
