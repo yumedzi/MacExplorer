@@ -23,9 +23,12 @@ struct ColumnHeaderTests {
         let context = NSGraphicsContext(bitmapImageRep: rep)!
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
-        NSColor.white.setFill()
-        bounds.fill()
-        header.drawInterior(withFrame: bounds, in: headerView)
+        // Pin the appearance: label colors are translucent and vanish on a mismatched background.
+        NSAppearance(named: .aqua)!.performAsCurrentDrawingAppearance {
+            NSColor.white.setFill()
+            bounds.fill()
+            header.drawInterior(withFrame: bounds, in: headerView)
+        }
         NSGraphicsContext.restoreGraphicsState()
         return Array(UnsafeBufferPointer(start: rep.bitmapData!, count: rep.bytesPerRow * rep.pixelsHigh))
     }
