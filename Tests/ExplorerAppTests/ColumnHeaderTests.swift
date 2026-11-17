@@ -18,15 +18,16 @@ struct ColumnHeaderTests {
         let headerView = NSTableHeaderView(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
         headerView.tableView = table
         let bounds = NSRect(x: 0, y: 0, width: 120, height: 24)
-        let image = NSImage(size: bounds.size)
-        image.lockFocus()
-        NSColor.black.setFill()
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 120, pixelsHigh: 24, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let context = NSGraphicsContext(bitmapImageRep: rep)!
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        NSColor.white.setFill()
         bounds.fill()
         header.drawInterior(withFrame: bounds, in: headerView)
-        image.unlockFocus()
-        var rect = NSRect(origin: .zero, size: image.size)
-        let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil)!
-        return [UInt8](cg.dataProvider!.data! as Data)
+        NSGraphicsContext.restoreGraphicsState()
+        return Array(UnsafeBufferPointer(start: rep.bitmapData!, count: rep.bytesPerRow * rep.pixelsHigh))
     }
 
     @Test func sortedColumnDrawsADirectionIndicator() {
