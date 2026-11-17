@@ -326,21 +326,81 @@ final class ExplorerWindow: NSWindow {
         NSAnimationContext.endGrouping()
         standardWindowButton(.closeButton)?.superview?.layer?.removeAllAnimations()
     }
+    private static let controlKinds: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+    /// Where each traffic light belongs. Cached as numbers rather than a tab view because tab
+    /// chips are rebuilt on tab changes, and a stale reference would leave the lights unguarded.
+    private var controlTargetY: [NSWindow.ButtonType: CGFloat] = [:]
+    private var controlObservers: [NSObjectProtocol] = []
+    private var aligningControls = false
     func alignWindowControls(with tabView: NSView) {
         guard !styleMask.contains(.fullScreen), tabView.window === self, tabView.bounds.height > 0 else { return }
         // Keep the real AppKit controls, horizontal spacing and native actions.
         // Convert from the tab body so its top padding is included in alignment.
-        // Corrections under half a point fight AppKit's own layout and make the buttons bounce.
+        for kind in Self.controlKinds {
+            guard let button = standardWindowButton(kind), let parent = button.superview else { continue }
+            let center = parent.convert(NSPoint(x: tabView.bounds.midX, y: tabView.bounds.midY), from: tabView)
+            controlTargetY[kind] = center.y - button.frame.height / 2
+        }
+        observeWindowControls()
+        installCommitGuard()
+        enforceControlAlignment()
+    }
+    // AppKit repositions the lights during its own layout/display passes, which can commit before
+    // any run-loop observer runs, so enforce at the end of each pass as well.
+    override func layoutIfNeeded() { super.layoutIfNeeded(); enforceControlAlignment() }
+    override func displayIfNeeded() { enforceControlAlignment(); super.displayIfNeeded(); enforceControlAlignment() }
+    override func update() { super.update(); enforceControlAlignment() }
+    private var commitGuard: CFRunLoopObserver?
+    /// Some AppKit moves arrive without a frame notification. Re-check just before Core Animation
+    /// commits each run-loop turn (its own observer runs at order 2_000_000), so a misplaced light
+    /// is never presented, even for one frame.
+    private func installCommitGuard() {
+        guard commitGuard == nil else { return }
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, 1_000_000) { [weak self] observer, _ in
+            guard let self else { CFRunLoopObserverInvalidate(observer); return }
+            MainActor.assumeIsolated { self.enforceControlAlignment() }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        commitGuard = observer
+    }
+    /// AppKit resets the traffic lights to their stock position whenever it re-lays out the titlebar
+    /// (tab switches do this). Correcting them in the next layout pass shows one frame at the wrong
+    /// height, which reads as a jump, so correct them synchronously the moment AppKit moves them.
+    private func observeWindowControls() {
+        guard controlObservers.isEmpty else { return }
+        for kind in Self.controlKinds {
+            guard let button = standardWindowButton(kind) else { continue }
+            button.postsFrameChangedNotifications = true
+            controlObservers.append(NotificationCenter.default.addObserver(
+                forName: NSView.frameDidChangeNotification, object: button, queue: .main
+            ) { [weak self] _ in MainActor.assumeIsolated { self?.enforceControlAlignment() } })
+        }
+    }
+    private func enforceControlAlignment() {
+        guard !aligningControls, !styleMask.contains(.fullScreen), !controlTargetY.isEmpty else { return }
+        aligningControls = true
+        defer { aligningControls = false }
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
         NSAnimationContext.current.allowsImplicitAnimation = false
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for kind: NSWindow.ButtonType in [.closeButton, .miniaturizeButton, .zoomButton] {
-            guard let button = standardWindowButton(kind), let parent = button.superview else { continue }
-            let center = parent.convert(NSPoint(x: tabView.bounds.midX, y: tabView.bounds.midY), from: tabView)
-            let y = center.y - button.frame.height / 2
-            if abs(button.frame.minY - y) > 0.5 { button.setFrameOrigin(NSPoint(x: button.frame.minX, y: y)) }
+        // Moving one control can make AppKit move another (notifications for that are ignored while
+        // aligning), so repeat until every control is in place.
+        for _ in 0..<4 {
+            var moved = false
+            for kind in Self.controlKinds {
+                guard let button = standardWindowButton(kind), let y = controlTargetY[kind] else { continue }
+                // Corrections under half a point fight AppKit's own layout and make the buttons bounce.
+                if abs(button.frame.minY - y) > 0.5 { button.setFrameOrigin(NSPoint(x: button.frame.minX, y: y)); moved = true }
+            }
+            if !moved { break }
+        }
+        // AppKit's own move may have started an implicit position animation toward the stock
+        // spot; it would keep playing on screen after the frame is corrected.
+        for kind in Self.controlKinds {
+            guard let layer = standardWindowButton(kind)?.layer else { continue }
+            for key in ["position", "bounds", "frame", "transform"] where layer.animation(forKey: key) != nil { layer.removeAnimation(forKey: key) }
         }
         CATransaction.commit()
         NSAnimationContext.endGrouping()
