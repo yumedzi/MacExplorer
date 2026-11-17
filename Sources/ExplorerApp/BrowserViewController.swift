@@ -13,6 +13,7 @@ final class BrowserTab {
     var collapsedGroups: Set<String> = []
     var displayIndex = FileDisplayIndex()
     func clearVisible() { visible = []; groups = []; displayIndex = FileDisplayIndex() }
+    var sidebarState = SidebarState()
     var query = ""
     var searchScope = AppPreferences.shared.searchScope
     var searchTask: Task<Void, Never>?
@@ -473,7 +474,9 @@ final class BrowserViewController: NSViewController, NSTableViewDataSource, NSTa
     func newTab(url: URL? = nil) {
         workspace?.activate(self)
         rememberSelection(); tab.searchTask?.cancel(); tab.loadTask?.cancel(); tab.sortTask?.cancel()
-        tabs.append(BrowserTab(url: url ?? tab.history.current)); activeIndex = tabs.count - 1
+        let created = BrowserTab(url: url ?? tab.history.current)
+        created.sidebarState = SidebarState(copying: tab.sidebarState)
+        tabs.append(created); activeIndex = tabs.count - 1
         updateChrome(); loadFolder(clear: true); saveSession(); view.window?.makeFirstResponder(activeFileView)
     }
     func activateTab(id: UUID) {

@@ -8,6 +8,8 @@ final class FolderNode: NSObject {
     let symbol: String
     let section: Bool
     var favoriteID: UUID?
+    /// Identity of this node inside the tree, used to remember per-tab expansion. Section roots have none.
+    var stateKey: String?
     var ejectable = false
     var finderColors = FinderColorSummary()
     var children: [FolderNode]?
@@ -16,6 +18,15 @@ final class FolderNode: NSObject {
     init(title: String, url: URL?, symbol: String = "folder", section: Bool = false, children: [FolderNode]? = nil) {
         self.title = title; self.url = url; self.symbol = symbol; self.section = section; self.children = children
     }
+}
+
+/// Which folders one tab has expanded in the sidebar. Every tab owns its own instance so
+/// expanding a folder in one tab never changes what another tab shows.
+@MainActor
+final class SidebarState {
+    var expanded: Set<String> = []
+    var scrollY: CGFloat = 0
+    init(copying other: SidebarState? = nil) { expanded = other?.expanded ?? []; scrollY = other?.scrollY ?? 0 }
 }
 
 @MainActor
@@ -31,6 +42,9 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     private var generation = UUID()
     private var selectedURL: URL?
     private var storageIdentity: [String] = []
+    private var state = SidebarState()
+    /// True while expansion is being restored programmatically, so those notifications are not recorded as user changes.
+    private var applying = false
 
     override func loadView() {
         let surface = Surface(); surface.color = Palette.sidebar; view = surface
@@ -75,28 +89,76 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         rebuild(); if let selectedURL { sync(to: selectedURL) }
     }
 
+    /// Switches the sidebar to another tab's expansion state without rebuilding the tree:
+    /// loaded folders are expanded or collapsed in place, so nothing reloads or flashes.
+    func attach(_ newState: SidebarState) {
+        guard newState !== state else { return }
+        syncTask?.cancel()
+        let scroll = outline.enclosingScrollView
+        state.scrollY = scroll?.contentView.bounds.origin.y ?? 0
+        state = newState
+        applying = true; syncing = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.allowsImplicitAnimation = false
+            outline.deselectAll(nil)
+            for root in roots { restoreExpansion(in: root.children) }
+        }
+        outline.layoutSubtreeIfNeeded()
+        if let scroll {
+            let limit = max(0, outline.frame.height - scroll.contentView.bounds.height)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, newState.scrollY), limit)))
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
+        applying = false; syncing = false
+    }
+
+    private func restoreExpansion(in nodes: [FolderNode]?) {
+        for node in nodes ?? [] {
+            guard let key = node.stateKey else { continue }
+            if state.expanded.contains(key) {
+                if !outline.isItemExpanded(node) { outline.expandItem(node) }
+                restoreExpansion(in: node.children)
+            } else if outline.isItemExpanded(node) {
+                outline.collapseItem(node, collapseChildren: true)
+            }
+        }
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        guard !applying, let key = (notification.userInfo?["NSObject"] as? FolderNode)?.stateKey else { return }
+        state.expanded.insert(key)
+    }
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        guard !applying, let key = (notification.userInfo?["NSObject"] as? FolderNode)?.stateKey else { return }
+        state.expanded.remove(key)
+    }
+
     func rebuild() {
         generation = UUID(); syncTask?.cancel()
         let pins = FavoriteStore.shared.favorites.items.map { favorite in
             let node = FolderNode(title: favorite.name, url: favorite.url, symbol: favoriteSymbol(favorite.url))
-            node.favoriteID = favorite.id; return node
+            node.favoriteID = favorite.id; node.stateKey = "fav|" + favorite.url.path; return node
         }
         let locations = StorageStore.shared.locations
         var devices = locations.filter { !$0.isNetworkLocation }.map {
             let node = FolderNode(title: $0.title, url: $0.url, symbol: $0.kind == .internalDrive ? "internaldrive" : "externaldrive")
-            node.ejectable = VolumeEject.canEject($0); return node
+            node.ejectable = VolumeEject.canEject($0); node.stateKey = "mac|" + $0.url.path; return node
         }
         if !DemoData.active && !devices.contains(where: { $0.url?.path == "/" }) {
-            devices.insert(FolderNode(title: "Macintosh HD", url: URL(fileURLWithPath: "/"), symbol: "internaldrive"), at: 0)
+            let disk = FolderNode(title: "Macintosh HD", url: URL(fileURLWithPath: "/"), symbol: "internaldrive")
+            disk.stateKey = "mac|/"; devices.insert(disk, at: 0)
         }
         let networks = locations.filter(\.isNetworkLocation).map {
             let node = FolderNode(title: $0.title, url: $0.url, symbol: $0.kind == .network ? "network" : "cloud.fill")
-            node.ejectable = VolumeEject.canEject($0); return node
+            node.ejectable = VolumeEject.canEject($0); node.stateKey = "net|" + $0.url.path; return node
         }
         roots = [FolderNode(title: "Favorites", url: nil, section: true, children: pins),
                  FolderNode(title: "This Mac", url: BrowserLocation.thisMac, symbol: "desktopcomputer", children: devices)]
         if !networks.isEmpty { roots.append(FolderNode(title: "Network locations", url: nil, section: true, children: networks)) }
-        syncing = true; outline.reloadData(); roots.forEach { outline.expandItem($0) }; syncing = false
+        syncing = true; applying = true
+        outline.reloadData(); roots.forEach { outline.expandItem($0) }
+        for root in roots { restoreExpansion(in: root.children) }
+        syncing = false; applying = false
         let colorGeneration = generation
         let colorNodes = roots.flatMap { $0.children ?? [] }.filter { $0.url?.isFileURL == true }
         let urls = colorNodes.compactMap(\.url)
@@ -118,13 +180,27 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             guard let path = $0.url?.path else { return false }
             return path == "/" || url.path == path || url.path.hasPrefix(path + "/")
         }.sorted { ($0.url?.path.count ?? 0) > ($1.url?.path.count ?? 0) }
-        guard let root = candidates.first else { return }
+        guard let root = candidates.first else {
+            syncing = true; outline.deselectAll(nil); syncing = false; return
+        }
+        let parts = Array(url.pathComponents.dropFirst(root.url!.pathComponents.count))
+        // Fast path: everything is already loaded (e.g. returning to a tab), so select
+        // synchronously instead of leaving the old tab's highlight up for a run-loop turn.
+        var chain = [root]
+        for part in parts {
+            guard let next = chain.last?.children?.first(where: { $0.url?.lastPathComponent == part }) else { break }
+            chain.append(next)
+        }
+        if chain.count == parts.count + 1, let target = chain.last {
+            syncing = true
+            for ancestor in chain.dropLast() where !outline.isItemExpanded(ancestor) { outline.expandItem(ancestor) }
+            select(target); syncing = false
+            return
+        }
         let generation = self.generation
         syncTask = Task { [weak self] in
             guard let self else { return }
             var node = root
-            let base = root.url!.pathComponents.count
-            let parts = Array(url.pathComponents.dropFirst(base))
             for part in parts {
                 await self.loadChildren(node)
                 guard !Task.isCancelled, self.generation == generation else { return }
@@ -140,6 +216,7 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
                     guard !Task.isCancelled, self.generation == generation else { return }
                     if exists {
                         let child = FolderNode(title: part, url: candidate)
+                        child.stateKey = node.stateKey.map { $0 + "|" + candidate.path }
                         node.children = ((node.children ?? []).filter { $0.url != nil } + [child])
                             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
                         self.syncing = true; self.outline.reloadItem(node, reloadChildren: true)
@@ -151,12 +228,15 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
                 node = next
             }
             guard !Task.isCancelled, self.generation == generation else { return }
-            let row = self.outline.row(forItem: node)
-            if row >= 0 {
-                self.syncing = true; self.outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-                self.outline.scrollRowToVisible(row); self.syncing = false
-            }
+            self.syncing = true; self.select(node); self.syncing = false
         }
+    }
+
+    private func select(_ node: FolderNode) {
+        let row = outline.row(forItem: node)
+        guard row >= 0 else { return }
+        outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        outline.scrollRowToVisible(row)
     }
 
     private func loadChildren(_ node: FolderNode) async {
@@ -173,12 +253,17 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             node.loading = nil; outline.reloadItem(node, reloadChildren: true); return
         }
         guard self.generation == generation, node.children == nil else { return }
-        node.children = FileSort().apply(to: children, showHidden: showHidden).map {
-            let child = FolderNode(title: $0.name, url: $0.url, symbol: "folder")
-            child.finderColors = $0.finderColors; return child
+        let parentKey = node.stateKey
+        node.children = FileSort().apply(to: children, showHidden: showHidden).map { item in
+            let child = FolderNode(title: item.name, url: item.url, symbol: "folder")
+            child.stateKey = parentKey.map { $0 + "|" + item.url.path }
+            child.finderColors = item.finderColors; return child
         }
         node.loading = nil
-        syncing = true; outline.reloadItem(node, reloadChildren: true); syncing = false
+        syncing = true; applying = true
+        outline.reloadItem(node, reloadChildren: true)
+        restoreExpansion(in: node.children)
+        syncing = false; applying = false
     }
 
     private func favoriteSymbol(_ url: URL) -> String {
@@ -315,6 +400,7 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         syncing = true
         outline.expandItem(node)
         for child in node.children ?? [] { outline.collapseItem(child, collapseChildren: true) }
+        state.expanded = state.expanded.filter { !$0.hasPrefix("fav|") }
         syncing = false
     }
     @objc private func ejectNode(_ sender: NSObject) {

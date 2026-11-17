@@ -240,11 +240,13 @@ final class WorkspaceViewController: NSViewController, NSSplitViewDelegate {
     }
     func syncSidebar(from browser: BrowserViewController) {
         guard ready, browser === activeBrowser else { return }
+        sidebar.attach(browser.tab.sidebarState)
         if sidebar.showHidden != browser.showHidden { sidebar.showHidden = browser.showHidden; sidebar.rebuild() }
         sidebar.sync(to: browser.tab.history.current)
     }
     func refreshSidebar(from browser: BrowserViewController) {
         guard ready, browser === activeBrowser else { return }
+        sidebar.attach(browser.tab.sidebarState)
         sidebar.showHidden = browser.showHidden; sidebar.rebuild(); sidebar.sync(to: browser.tab.history.current)
     }
     func saveSession() {
