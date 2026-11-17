@@ -98,12 +98,10 @@ final class FolderSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         state.scrollY = scroll?.contentView.bounds.origin.y ?? 0
         state = newState
         applying = true; syncing = true
-        NSAnimationContext.runAnimationGroup { context in
-            context.allowsImplicitAnimation = false
-            outline.deselectAll(nil)
-            for root in roots { restoreExpansion(in: root.children) }
-        }
-        outline.layoutSubtreeIfNeeded()
+        outline.deselectAll(nil)
+        for root in roots { restoreExpansion(in: root.children) }
+        // No forced layout here: attach runs mid tab-switch, and a layout pass at this point
+        // reaches windowDidLayout and re-aligns the traffic lights, making them jump.
         if let scroll {
             let limit = max(0, outline.frame.height - scroll.contentView.bounds.height)
             scroll.contentView.scroll(to: NSPoint(x: 0, y: min(max(0, newState.scrollY), limit)))
